@@ -1,24 +1,39 @@
-import * as ort from "onnxruntime-web";
+import { InferenceSession, Tensor } from 'onnxruntime-web';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-let sessionPromise = null;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+  }
+
   try {
-    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+    const body = await req.json();
+    const { TransactionAmount, AccountBalance } = body;
 
-    if (!sessionPromise) {
-      sessionPromise = ort.InferenceSession.create(new URL("./model.onnx", import.meta.url).href, { executionProviders: ["wasm"] });
+    if (TransactionAmount == null || AccountBalance == null) {
+      return new Response(JSON.stringify({ error: 'TransactionAmount and AccountBalance required' }), { status: 400 });
     }
-    const session = await sessionPromise;
 
-    const { TransactionAmount, AccountBalance } = req.body;
+    // Convert input ke float32 karena onnxruntime-web tidak support float64
+    const inputTensor = new Tensor('float32', Float32Array.from([TransactionAmount, AccountBalance]), [1, 2]);
 
-    const inputTensor = new ort.Tensor("float32", new Float32Array([TransactionAmount, AccountBalance]), [1, 2]);
+    // Path model
+    const modelPath = path.join(__dirname, '../model/model.onnx');
+
+    // Load session ONNX
+    const session = await InferenceSession.create(modelPath);
+
+    // Jalankan inference
     const results = await session.run({ input: inputTensor });
-    const output = results.output.data[0];
 
-    res.status(200).json({ cluster: output });
+    return new Response(JSON.stringify({ output: results.output.data }), { status: 200 });
+
   } catch (err) {
-    res.status(500).json({ error: err.toString() });
+    console.error(err);
+    return new Response(JSON.stringify({ error: err.message }), { status: 500 });
   }
 }
